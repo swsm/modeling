@@ -1,4 +1,4 @@
-package TemplatePattern.s1;
+package TemplatePattern.S1;
 
 public class TestPaperA {
     public void testQuestion1() {
