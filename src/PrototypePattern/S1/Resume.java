@@ -1,4 +1,4 @@
-package PrototypePattern;
+package PrototypePattern.S1;
 
 public class Resume {
     private String name;
