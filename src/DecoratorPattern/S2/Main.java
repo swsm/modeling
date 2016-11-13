@@ -17,6 +17,9 @@ public class Main {
         Finery xz = new Suit();
         Finery ld = new Tie();
         Finery px = new LeatherShoes();
+        xz.show();
+        ld.show();
+        px.show();
         xc.show();
     }
 

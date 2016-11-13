@@ -5,7 +5,13 @@ public class ConcreteDecoratorA extends  Decorator {
     @Override
     public void operation() {
         super.operation();
-        addedState = "New State";
+        this.setAddedState("New State");
         System.out.println("具体装饰对象A的操作");
+    }
+    public String getAddedState() {
+        return addedState;
+    }
+    public void setAddedState(String addedState) {
+        this.addedState = addedState;
     }
 }

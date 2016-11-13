@@ -1,7 +1,6 @@
 package SimpleFactoryPattern;
 
 import java.io.BufferedReader;
-import java.io.IOException;
 import java.io.InputStreamReader;
 
 public class Program2 {

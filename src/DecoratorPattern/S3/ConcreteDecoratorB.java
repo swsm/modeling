@@ -12,4 +12,12 @@ public class ConcreteDecoratorB extends  Decorator {
     public void addedBehavior() {
         
     }
+
+    public String getAddedState() {
+        return addedState;
+    }
+
+    public void setAddedState(String addedState) {
+        this.addedState = addedState;
+    }
 }
