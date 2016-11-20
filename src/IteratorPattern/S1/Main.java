@@ -12,7 +12,6 @@ public class Main {
         
         //Iterator i = new ConcreteIterator(a);
         Iterator i = new ConcreteIteratorDesc(a);
-        Object item = i.first();
         while (!i.isDone()) {
             System.out.println(i.currentItem() + "请买车票!");
             i.next();
