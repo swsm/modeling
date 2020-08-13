@@ -1,4 +1,4 @@
-package cases.auth;
+package jksj.wangzeng.auth;
 
 /**
  * @author swsm

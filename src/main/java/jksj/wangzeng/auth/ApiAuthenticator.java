@@ -1,4 +1,4 @@
-package cases.auth;
+package jksj.wangzeng.auth;
 
 /**
  * api权限鉴权接口

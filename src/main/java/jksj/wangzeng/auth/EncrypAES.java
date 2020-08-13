@@ -1,4 +1,4 @@
-package cases.auth;
+package jksj.wangzeng.auth;
 
 import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
