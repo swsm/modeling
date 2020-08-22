@@ -1,4 +1,4 @@
-package jksj.wangzeng.apialert.one;
+package jksj.wangzeng.ocp.apialert.one;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

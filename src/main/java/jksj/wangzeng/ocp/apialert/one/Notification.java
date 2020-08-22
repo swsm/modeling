@@ -1,4 +1,4 @@
-package jksj.wangzeng.apialert.one;
+package jksj.wangzeng.ocp.apialert.one;
 
 /**
  * 通知类

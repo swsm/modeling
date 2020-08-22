@@ -1,4 +1,4 @@
-package jksj.wangzeng.apialert.one;
+package jksj.wangzeng.ocp.apialert.one;
 
 /**告警紧急程度
  * @author swsm
