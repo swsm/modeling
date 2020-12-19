@@ -1,8 +1,8 @@
 package jksj.wangzeng.testunit.example.two.restructure;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.sun.org.slf4j.internal.Logger;
-import com.sun.org.slf4j.internal.LoggerFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
