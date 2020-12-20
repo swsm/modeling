@@ -1270,3 +1270,1768 @@ public class ChessBoard {
 }
 ```
 
+# 3. 行为型
+
+## 3.1 观察者模式
+
+### 3.1.1 描述
+
+**观察者模式**：在对象之间定义一个一对多的依赖，当一个对象状态改变的时候，所有依赖的对象都会自动收到通知
+
+### 3.1.2 实现方式
+
+#### 3.1.2.1 同步阻塞方式 进程内
+
+```java
+
+public interface Subject {
+  void registerObserver(Observer observer);
+  void removeObserver(Observer observer);
+  void notifyObservers(Message message);
+}
+
+public class ConcreteSubject implements Subject {
+  private List<Observer> observers = new ArrayList<Observer>();
+
+  @Override
+  public void registerObserver(Observer observer) {
+    observers.add(observer);
+  }
+
+  @Override
+  public void removeObserver(Observer observer) {
+    observers.remove(observer);
+  }
+
+  @Override
+  public void notifyObservers(Message message) {
+    for (Observer observer : observers) {
+      observer.update(message);
+    }
+  }
+
+}
+
+public interface Observer {
+  void update(Message message);
+}
+
+public class ConcreteObserverOne implements Observer {
+  @Override
+  public void update(Message message) {
+    //TODO: 获取消息通知，执行自己的逻辑...
+    System.out.println("ConcreteObserverOne is notified.");
+  }
+}
+
+public class ConcreteObserverTwo implements Observer {
+  @Override
+  public void update(Message message) {
+    //TODO: 获取消息通知，执行自己的逻辑...
+    System.out.println("ConcreteObserverTwo is notified.");
+  }
+}
+
+public class Demo {
+  public static void main(String[] args) {
+    ConcreteSubject subject = new ConcreteSubject();
+    subject.registerObserver(new ConcreteObserverOne());
+    subject.registerObserver(new ConcreteObserverTwo());
+    subject.notifyObservers(new Message());
+  }
+}
+```
+
+#### 3.1.2.2 异步非阻塞 进程内
+
+```java
+
+// 第一种实现方式，其他类代码不变，就没有再重复罗列
+public class RegPromotionObserver implements RegObserver {
+  private PromotionService promotionService; // 依赖注入
+
+  @Override
+  public void handleRegSuccess(Long userId) {
+    Thread thread = new Thread(new Runnable() {
+      @Override
+      public void run() {
+        promotionService.issueNewUserExperienceCash(userId);
+      }
+    });
+    thread.start();
+  }
+}
+
+// 第二种实现方式，其他类代码不变，就没有再重复罗列
+public class UserController {
+  private UserService userService; // 依赖注入
+  private List<RegObserver> regObservers = new ArrayList<>();
+  private Executor executor;
+
+  public UserController(Executor executor) {
+    this.executor = executor;
+  }
+
+  public void setRegObservers(List<RegObserver> observers) {
+    regObservers.addAll(observers);
+  }
+
+  public Long register(String telephone, String password) {
+    //省略输入参数的校验代码
+    //省略userService.register()异常的try-catch代码
+    long userId = userService.register(telephone, password);
+
+    for (RegObserver observer : regObservers) {
+      executor.execute(new Runnable() {
+        @Override
+        public void run() {
+          observer.handleRegSuccess(userId);
+        }
+      });
+    }
+
+    return userId;
+  }
+}
+```
+
+使用google EventBus实现
+
+```java
+
+public class UserController {
+  private UserService userService; // 依赖注入
+
+  private EventBus eventBus;
+  private static final int DEFAULT_EVENTBUS_THREAD_POOL_SIZE = 20;
+
+  public UserController() {
+    //eventBus = new EventBus(); // 同步阻塞模式
+    eventBus = new AsyncEventBus(Executors.newFixedThreadPool(DEFAULT_EVENTBUS_THREAD_POOL_SIZE)); // 异步非阻塞模式
+  }
+
+  public void setRegObservers(List<Object> observers) {
+    for (Object observer : observers) {
+      eventBus.register(observer);
+    }
+  }
+
+  public Long register(String telephone, String password) {
+    //省略输入参数的校验代码
+    //省略userService.register()异常的try-catch代码
+    long userId = userService.register(telephone, password);
+
+    eventBus.post(userId);
+
+    return userId;
+  }
+}
+
+public class RegPromotionObserver {
+  private PromotionService promotionService; // 依赖注入
+
+  @Subscribe
+  public void handleRegSuccess(Long userId) {
+    promotionService.issueNewUserExperienceCash(userId);
+  }
+}
+
+public class RegNotificationObserver {
+  private NotificationService notificationService;
+
+  @Subscribe
+  public void handleRegSuccess(Long userId) {
+    notificationService.sendInboxMessage(userId, "...");
+  }
+}
+```
+
+EventBus、AsyncEventBus、register() 函数、unregister() 函数、post() 函数、@Subscribe 注解
+
+```java
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+@Beta
+public @interface Subscribe {}
+
+
+public class ObserverAction {
+  private Object target;
+  private Method method;
+
+  public ObserverAction(Object target, Method method) {
+    this.target = Preconditions.checkNotNull(target);
+    this.method = method;
+    this.method.setAccessible(true);
+  }
+
+  public void execute(Object event) { // event是method方法的参数
+    try {
+      method.invoke(target, event);
+    } catch (InvocationTargetException | IllegalAccessException e) {
+      e.printStackTrace();
+    }
+  }
+}
+
+
+public class ObserverRegistry {
+  private ConcurrentMap<Class<?>, CopyOnWriteArraySet<ObserverAction>> registry = new ConcurrentHashMap<>();
+
+  public void register(Object observer) {
+    Map<Class<?>, Collection<ObserverAction>> observerActions = findAllObserverActions(observer);
+    for (Map.Entry<Class<?>, Collection<ObserverAction>> entry : observerActions.entrySet()) {
+      Class<?> eventType = entry.getKey();
+      Collection<ObserverAction> eventActions = entry.getValue();
+      CopyOnWriteArraySet<ObserverAction> registeredEventActions = registry.get(eventType);
+      if (registeredEventActions == null) {
+        registry.putIfAbsent(eventType, new CopyOnWriteArraySet<>());
+        registeredEventActions = registry.get(eventType);
+      }
+      registeredEventActions.addAll(eventActions);
+    }
+  }
+
+  public List<ObserverAction> getMatchedObserverActions(Object event) {
+    List<ObserverAction> matchedObservers = new ArrayList<>();
+    Class<?> postedEventType = event.getClass();
+    for (Map.Entry<Class<?>, CopyOnWriteArraySet<ObserverAction>> entry : registry.entrySet()) {
+      Class<?> eventType = entry.getKey();
+      Collection<ObserverAction> eventActions = entry.getValue();
+      if (postedEventType.isAssignableFrom(eventType)) {
+        matchedObservers.addAll(eventActions);
+      }
+    }
+    return matchedObservers;
+  }
+
+  private Map<Class<?>, Collection<ObserverAction>> findAllObserverActions(Object observer) {
+    Map<Class<?>, Collection<ObserverAction>> observerActions = new HashMap<>();
+    Class<?> clazz = observer.getClass();
+    for (Method method : getAnnotatedMethods(clazz)) {
+      Class<?>[] parameterTypes = method.getParameterTypes();
+      Class<?> eventType = parameterTypes[0];
+      if (!observerActions.containsKey(eventType)) {
+        observerActions.put(eventType, new ArrayList<>());
+      }
+      observerActions.get(eventType).add(new ObserverAction(observer, method));
+    }
+    return observerActions;
+  }
+
+  private List<Method> getAnnotatedMethods(Class<?> clazz) {
+    List<Method> annotatedMethods = new ArrayList<>();
+    for (Method method : clazz.getDeclaredMethods()) {
+      if (method.isAnnotationPresent(Subscribe.class)) {
+        Class<?>[] parameterTypes = method.getParameterTypes();
+        Preconditions.checkArgument(parameterTypes.length == 1,
+                "Method %s has @Subscribe annotation but has %s parameters."
+                        + "Subscriber methods must have exactly 1 parameter.",
+                method, parameterTypes.length);
+        annotatedMethods.add(method);
+      }
+    }
+    return annotatedMethods;
+  }
+}
+
+
+public class EventBus {
+  private Executor executor;
+  private ObserverRegistry registry = new ObserverRegistry();
+
+  public EventBus() {
+    this(MoreExecutors.directExecutor());
+  }
+
+  protected EventBus(Executor executor) {
+    this.executor = executor;
+  }
+
+  public void register(Object object) {
+    registry.register(object);
+  }
+
+  public void post(Object event) {
+    List<ObserverAction> observerActions = registry.getMatchedObserverActions(event);
+    for (ObserverAction observerAction : observerActions) {
+      executor.execute(new Runnable() {
+        @Override
+        public void run() {
+          observerAction.execute(event);
+        }
+      });
+    }
+  }
+}
+
+
+public class AsyncEventBus extends EventBus {
+  public AsyncEventBus(Executor executor) {
+    super(executor);
+  }
+}
+```
+
+
+
+## 3.2 模板模式
+
+### 3.2.1 描述
+
+**模板模式**在一个方法中定义一个算法骨架，并将某些步骤推迟到子类中实现。模板方法模式可以让子类在不改变算法整体结构的情况下，重新定义算法中的某些步骤。
+
+### 3.2.2 实现
+
+```java
+
+public abstract class AbstractClass {
+  public final void templateMethod() {
+    //...
+    method1();
+    //...
+    method2();
+    //...
+  }
+  
+  protected abstract void method1();
+  protected abstract void method2();
+}
+
+public class ConcreteClass1 extends AbstractClass {
+  @Override
+  protected void method1() {
+    //...
+  }
+  
+  @Override
+  protected void method2() {
+    //...
+  }
+}
+
+public class ConcreteClass2 extends AbstractClass {
+  @Override
+  protected void method1() {
+    //...
+  }
+  
+  @Override
+  protected void method2() {
+    //...
+  }
+}
+
+AbstractClass demo = ConcreteClass1();
+demo.templateMethod();
+```
+
+### 3.2.3 作用
+
+1. 复用    InputStream  read方法   AbstractList addAll方法
+2. 扩展    Java Servlet HelloServlet extends HttpServlet    Junit TestCase
+
+### 3.2.4 扩展
+
+#### 3.2.4.1 回调
+
+```java
+//如果 ICallback、UserClass 类是框架代码，TestClass 是使用框架的客户端代码，我们可以通过 ICallback 定制 process() 函数，也就是说，框架因此具有了扩展的能力。
+public class UserClass {
+    
+    @FunctionalInterface
+    interface Icallback {
+        void callBack();
+    }
+    
+    public void testCallBack(Icallback callback) {
+        System.out.println("我开始执行我的方法了");
+        callback.callBack();
+        System.out.println("我执行完我的方法了");
+    }
+}
+
+public class TestClass {
+    public static void main(String[] args) {
+        UserClass userClass = new UserClass();
+        userClass.testCallBack(() -> {
+            System.out.println("我被回调啦啦啦啦");
+        });
+    }
+}
+
+```
+
+
+
+## 3.3 策略模式
+
+### 3.3.1 描述
+
+定义一族算法类，将每个算法分别封装起来，让它们可以互相替换。策略模式可以使算法的变化独立于使用它们的客户端（这里的客户端代指使用算法的代码）
+
+### 3.3.2  实现
+
+```java
+// ----------策略的定义
+public interface Strategy {
+  void algorithmInterface();
+}
+
+public class ConcreteStrategyA implements Strategy {
+  @Override
+  public void  algorithmInterface() {
+    //具体的算法...
+  }
+}
+
+public class ConcreteStrategyB implements Strategy {
+  @Override
+  public void  algorithmInterface() {
+    //具体的算法...
+  }
+}
+
+
+// ----------策略的创建
+// 缓存的
+public class StrategyFactory {
+  private static final Map<String, Strategy> strategies = new HashMap<>();
+
+  static {
+    strategies.put("A", new ConcreteStrategyA());
+    strategies.put("B", new ConcreteStrategyB());
+  }
+
+  public static Strategy getStrategy(String type) {
+    if (type == null || type.isEmpty()) {
+      throw new IllegalArgumentException("type should not be empty.");
+    }
+    return strategies.get(type);
+  }
+}
+
+// 重新创建的
+public class StrategyFactory {
+  public static Strategy getStrategy(String type) {
+    if (type == null || type.isEmpty()) {
+      throw new IllegalArgumentException("type should not be empty.");
+    }
+
+    if (type.equals("A")) {
+      return new ConcreteStrategyA();
+    } else if (type.equals("B")) {
+      return new ConcreteStrategyB();
+    }
+
+    return null;
+  }
+}
+
+
+// ----------策略的使用
+// 策略接口：EvictionStrategy
+// 策略类：LruEvictionStrategy、FifoEvictionStrategy、LfuEvictionStrategy...
+// 策略工厂：EvictionStrategyFactory
+
+public class UserCache {
+  private Map<String, User> cacheData = new HashMap<>();
+  private EvictionStrategy eviction;
+
+  public UserCache(EvictionStrategy eviction) {
+    this.eviction = eviction;
+  }
+  //...
+}
+
+// 运行时动态确定，根据配置文件的配置决定使用哪种策略
+public class Application {
+  public static void main(String[] args) throws Exception {
+    EvictionStrategy evictionStrategy = null;
+    Properties props = new Properties();
+    props.load(new FileInputStream("./config.properties"));
+    String type = props.getProperty("eviction_type");
+    evictionStrategy = EvictionStrategyFactory.getEvictionStrategy(type);
+    UserCache userCache = new UserCache(evictionStrategy);
+    //...
+  }
+}
+
+// 非运行时动态确定，在代码中指定使用哪种策略
+public class Application {
+  public static void main(String[] args) {
+    //...
+    EvictionStrategy evictionStrategy = new LruEvictionStrategy();
+    UserCache userCache = new UserCache(evictionStrategy);
+    //...
+  }
+}
+```
+
+1. 策略类的定义比较简单，包含一个策略接口和一组实现这个接口的策略类。
+2. 策略的创建由工厂类来完成，封装策略创建的细节。
+3. 策略模式包含一组策略可选，客户端代码如何选择使用哪个策略，有两种确定方法：编译时静态确定和运行时动态确定。其中，“运行时动态确定”才是策略模式最典型的应用场景。
+
+```java
+
+public interface ISortAlg {
+  void sort(String filePath);
+}
+
+public class QuickSort implements ISortAlg {
+  @Override
+  public void sort(String filePath) {
+    //...
+  }
+}
+
+public class ExternalSort implements ISortAlg {
+  @Override
+  public void sort(String filePath) {
+    //...
+  }
+}
+
+public class ConcurrentExternalSort implements ISortAlg {
+  @Override
+  public void sort(String filePath) {
+    //...
+  }
+}
+
+public class MapReduceSort implements ISortAlg {
+  @Override
+  public void sort(String filePath) {
+    //...
+  }
+}
+
+public class Sorter {
+  private static final long GB = 1000 * 1000 * 1000;
+
+  public void sortFile(String filePath) {
+    // 省略校验逻辑
+    File file = new File(filePath);
+    long fileSize = file.length();
+    ISortAlg sortAlg;
+    if (fileSize < 6 * GB) { // [0, 6GB)
+      sortAlg = new QuickSort();
+    } else if (fileSize < 10 * GB) { // [6GB, 10GB)
+      sortAlg = new ExternalSort();
+    } else if (fileSize < 100 * GB) { // [10GB, 100GB)
+      sortAlg = new ConcurrentExternalSort();
+    } else { // [100GB, ~)
+      sortAlg = new MapReduceSort();
+    }
+    sortAlg.sort(filePath);
+  }
+}
+
+
+public class SortAlgFactory {
+  private static final Map<String, ISortAlg> algs = new HashMap<>();
+
+  static {
+    algs.put("QuickSort", new QuickSort());
+    algs.put("ExternalSort", new ExternalSort());
+    algs.put("ConcurrentExternalSort", new ConcurrentExternalSort());
+    algs.put("MapReduceSort", new MapReduceSort());
+  }
+
+  public static ISortAlg getSortAlg(String type) {
+    if (type == null || type.isEmpty()) {
+      throw new IllegalArgumentException("type should not be empty.");
+    }
+    return algs.get(type);
+  }
+}
+
+public class Sorter {
+  private static final long GB = 1000 * 1000 * 1000;
+
+  public void sortFile(String filePath) {
+    // 省略校验逻辑
+    File file = new File(filePath);
+    long fileSize = file.length();
+    ISortAlg sortAlg;
+    if (fileSize < 6 * GB) { // [0, 6GB)
+      sortAlg = SortAlgFactory.getSortAlg("QuickSort");
+    } else if (fileSize < 10 * GB) { // [6GB, 10GB)
+      sortAlg = SortAlgFactory.getSortAlg("ExternalSort");
+    } else if (fileSize < 100 * GB) { // [10GB, 100GB)
+      sortAlg = SortAlgFactory.getSortAlg("ConcurrentExternalSort");
+    } else { // [100GB, ~)
+      sortAlg = SortAlgFactory.getSortAlg("MapReduceSort");
+    }
+    sortAlg.sort(filePath);
+  }
+}
+
+
+public class Sorter {
+  private static final long GB = 1000 * 1000 * 1000;
+  private static final List<AlgRange> algs = new ArrayList<>();
+  static {
+    algs.add(new AlgRange(0, 6*GB, SortAlgFactory.getSortAlg("QuickSort")));
+    algs.add(new AlgRange(6*GB, 10*GB, SortAlgFactory.getSortAlg("ExternalSort")));
+    algs.add(new AlgRange(10*GB, 100*GB, 
+                          SortAlgFactory.getSortAlg("ConcurrentExternalSort")));
+    algs.add(new AlgRange(100*GB, Long.MAX_VALUE,
+                          SortAlgFactory.getSortAlg("MapReduceSort")));
+  }
+
+  public void sortFile(String filePath) {
+    // 省略校验逻辑
+    File file = new File(filePath);
+    long fileSize = file.length();
+    ISortAlg sortAlg = null;
+    for (AlgRange algRange : algs) {
+      if (algRange.inRange(fileSize)) {
+        sortAlg = algRange.getAlg();
+        break;
+      }
+    }
+    sortAlg.sort(filePath);
+  }
+
+  private static class AlgRange {
+    private long start;
+    private long end;
+    private ISortAlg alg;
+
+    public AlgRange(long start, long end, ISortAlg alg) {
+      this.start = start;
+      this.end = end;
+      this.alg = alg;
+    }
+
+    public ISortAlg getAlg() {
+      return alg;
+    }
+
+    public boolean inRange(long size) {
+      return size >= start && size < end;
+    }
+  }
+}
+```
+
+
+
+## 3.4 职责链模式
+
+### 3.4.1 描述
+
+将请求的发送和接收解耦，让多个接收对象都有机会处理这个请求。将这些接收对象串成一条链，并沿着这条链传递这个请求，直到链上的某个接收对象能够处理它为止。
+
+### 3.4.2 实现
+
+```java
+
+public abstract class Handler {
+  protected Handler successor = null;
+
+  public void setSuccessor(Handler successor) {
+    this.successor = successor;
+  }
+
+  public abstract void handle();
+}
+
+public class HandlerA extends Handler {
+  @Override
+  public void handle() {
+    boolean handled = false;
+    //...
+    if (!handled && successor != null) {
+      successor.handle();
+    }
+  }
+}
+
+public class HandlerB extends Handler {
+  @Override
+  public void handle() {
+    boolean handled = false;
+    //...
+    if (!handled && successor != null) {
+      successor.handle();
+    } 
+  }
+}
+
+public class HandlerChain {
+  private Handler head = null;
+  private Handler tail = null;
+
+  public void addHandler(Handler handler) {
+    handler.setSuccessor(null);
+
+    if (head == null) {
+      head = handler;
+      tail = handler;
+      return;
+    }
+
+    tail.setSuccessor(handler);
+    tail = handler;
+  }
+
+  public void handle() {
+    if (head != null) {
+      head.handle();
+    }
+  }
+}
+
+// 使用举例
+public class Application {
+  public static void main(String[] args) {
+    HandlerChain chain = new HandlerChain();
+    chain.addHandler(new HandlerA());
+    chain.addHandler(new HandlerB());
+    chain.handle();
+  }
+}
+```
+
+```java
+
+public abstract class Handler {
+  protected Handler successor = null;
+
+  public void setSuccessor(Handler successor) {
+    this.successor = successor;
+  }
+
+  public final void handle() {
+    boolean handled = doHandle();
+    if (successor != null && !handled) {
+      successor.handle();
+    }
+  }
+
+  protected abstract boolean doHandle();
+}
+
+public class HandlerA extends Handler {
+  @Override
+  protected boolean doHandle() {
+    boolean handled = false;
+    //...
+    return handled;
+  }
+}
+
+public class HandlerB extends Handler {
+  @Override
+  protected boolean doHandle() {
+    boolean handled = false;
+    //...
+    return handled;
+  }
+}
+
+// HandlerChain和Application代码不变
+```
+
+###  3.4.3 应用场景
+
+#### 3.4.3.1 过滤敏感词
+
+```java
+
+public interface SensitiveWordFilter {
+  boolean doFilter(Content content);
+}
+
+public class SexyWordFilter implements SensitiveWordFilter {
+  @Override
+  public boolean doFilter(Content content) {
+    boolean legal = true;
+    //...
+    return legal;
+  }
+}
+
+// PoliticalWordFilter、AdsWordFilter类代码结构与SexyWordFilter类似
+
+public class SensitiveWordFilterChain {
+  private List<SensitiveWordFilter> filters = new ArrayList<>();
+
+  public void addFilter(SensitiveWordFilter filter) {
+    this.filters.add(filter);
+  }
+
+  // return true if content doesn't contain sensitive words.
+  public boolean filter(Content content) {
+    for (SensitiveWordFilter filter : filters) {
+      if (!filter.doFilter(content)) {
+        return false;
+      }
+    }
+    return true;
+  }
+}
+
+public class ApplicationDemo {
+  public static void main(String[] args) {
+    SensitiveWordFilterChain filterChain = new SensitiveWordFilterChain();
+    filterChain.addFilter(new AdsWordFilter());
+    filterChain.addFilter(new SexyWordFilter());
+    filterChain.addFilter(new PoliticalWordFilter());
+
+    boolean legal = filterChain.filter(new Content());
+    if (!legal) {
+      // 不发表
+    } else {
+      // 发表
+    }
+  }
+}
+```
+
+#### 3.4.3.2  Servlet Filter 过滤器
+
+Servlet Filter 是 Java Servlet 规范中定义的组件，翻译成中文就是过滤器，它可以实现对 HTTP 请求的过滤功能，比如鉴权、限流、记录日志、验证参数等等。因为它是 Servlet 规范的一部分，所以，只要是支持 Servlet 的 Web 容器（比如，Tomcat、Jetty 等），都支持过滤器功能
+
+```java
+
+public class LogFilter implements Filter {
+  @Override
+  public void init(FilterConfig filterConfig) throws ServletException {
+    // 在创建Filter时自动调用，
+    // 其中filterConfig包含这个Filter的配置参数，比如name之类的（从配置文件中读取的）
+  }
+
+  @Override
+  public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    System.out.println("拦截客户端发送来的请求.");
+    chain.doFilter(request, response);
+    System.out.println("拦截发送给客户端的响应.");
+  }
+
+  @Override
+  public void destroy() {
+    // 在销毁Filter时自动调用
+  }
+}
+
+// 在web.xml配置文件中如下配置：
+<filter>
+  <filter-name>logFilter</filter-name>
+  <filter-class>com.xzg.cd.LogFilter</filter-class>
+</filter>
+<filter-mapping>
+    <filter-name>logFilter</filter-name>
+    <url-pattern>/*</url-pattern>
+</filter-mapping>
+```
+
+#### 3.4.3.3 Spring Interceptor
+
+```java
+
+public class LogInterceptor implements HandlerInterceptor {
+
+  @Override
+  public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+    System.out.println("拦截客户端发送来的请求.");
+    return true; // 继续后续的处理
+  }
+
+  @Override
+  public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+    System.out.println("拦截发送给客户端的响应.");
+  }
+
+  @Override
+  public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) throws Exception {
+    System.out.println("这里总是被执行.");
+  }
+}
+
+//在Spring MVC配置文件中配置interceptors
+<mvc:interceptors>
+   <mvc:interceptor>
+       <mvc:mapping path="/*"/>
+       <bean class="com.xzg.cd.LogInterceptor" />
+   </mvc:interceptor>
+</mvc:interceptors>
+```
+
+## 3.5 状态模式
+
+### 3.5.1 描述
+
+状态模式是状态机的一种实现方法。它通过将事件触发的状态转移和动作执行，拆分到不同的状态类中，以此来避免状态机类中的分支判断逻辑，应对状态机类代码的复杂性
+
+### 3.5.2 实现
+
+```java
+
+public interface IMario { //所有状态类的接口
+  State getName();
+  //以下是定义的事件
+  void obtainMushRoom();
+  void obtainCape();
+  void obtainFireFlower();
+  void meetMonster();
+}
+
+public class SmallMario implements IMario {
+  private MarioStateMachine stateMachine;
+
+  public SmallMario(MarioStateMachine stateMachine) {
+    this.stateMachine = stateMachine;
+  }
+
+  @Override
+  public State getName() {
+    return State.SMALL;
+  }
+
+  @Override
+  public void obtainMushRoom() {
+    stateMachine.setCurrentState(new SuperMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() + 100);
+  }
+
+  @Override
+  public void obtainCape() {
+    stateMachine.setCurrentState(new CapeMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() + 200);
+  }
+
+  @Override
+  public void obtainFireFlower() {
+    stateMachine.setCurrentState(new FireMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() + 300);
+  }
+
+  @Override
+  public void meetMonster() {
+    // do nothing...
+  }
+}
+
+public class SuperMario implements IMario {
+  private MarioStateMachine stateMachine;
+
+  public SuperMario(MarioStateMachine stateMachine) {
+    this.stateMachine = stateMachine;
+  }
+
+  @Override
+  public State getName() {
+    return State.SUPER;
+  }
+
+  @Override
+  public void obtainMushRoom() {
+    // do nothing...
+  }
+
+  @Override
+  public void obtainCape() {
+    stateMachine.setCurrentState(new CapeMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() + 200);
+  }
+
+  @Override
+  public void obtainFireFlower() {
+    stateMachine.setCurrentState(new FireMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() + 300);
+  }
+
+  @Override
+  public void meetMonster() {
+    stateMachine.setCurrentState(new SmallMario(stateMachine));
+    stateMachine.setScore(stateMachine.getScore() - 100);
+  }
+}
+
+// 省略CapeMario、FireMario类...
+
+public class MarioStateMachine {
+  private int score;
+  private IMario currentState; // 不再使用枚举来表示状态
+
+  public MarioStateMachine() {
+    this.score = 0;
+    this.currentState = new SmallMario(this);
+  }
+
+  public void obtainMushRoom() {
+    this.currentState.obtainMushRoom();
+  }
+
+  public void obtainCape() {
+    this.currentState.obtainCape();
+  }
+
+  public void obtainFireFlower() {
+    this.currentState.obtainFireFlower();
+  }
+
+  public void meetMonster() {
+    this.currentState.meetMonster();
+  }
+
+  public int getScore() {
+    return this.score;
+  }
+
+  public State getCurrentState() {
+    return this.currentState.getName();
+  }
+
+  public void setScore(int score) {
+    this.score = score;
+  }
+
+  public void setCurrentState(IMario currentState) {
+    this.currentState = currentState;
+  }
+}
+```
+
+```java
+//实际上，像游戏这种比较复杂的状态机，包含的状态比较多，我优先推荐使用查表法，而状态模式会引入非常多的状态类，会导致代码比较难维护。
+//相反，像电商下单、外卖下单这种类型的状态机，它们的状态并不多，状态转移也比较简单，但事件触发执行的动作包含的业务逻辑可能会比较复杂，所以，更加推荐使用状态模式来实现
+
+public interface IMario {
+  State getName();
+  void obtainMushRoom(MarioStateMachine stateMachine);
+  void obtainCape(MarioStateMachine stateMachine);
+  void obtainFireFlower(MarioStateMachine stateMachine);
+  void meetMonster(MarioStateMachine stateMachine);
+}
+
+public class SmallMario implements IMario {
+  private static final SmallMario instance = new SmallMario();
+  private SmallMario() {}
+  public static SmallMario getInstance() {
+    return instance;
+  }
+
+  @Override
+  public State getName() {
+    return State.SMALL;
+  }
+
+  @Override
+  public void obtainMushRoom(MarioStateMachine stateMachine) {
+    stateMachine.setCurrentState(SuperMario.getInstance());
+    stateMachine.setScore(stateMachine.getScore() + 100);
+  }
+
+  @Override
+  public void obtainCape(MarioStateMachine stateMachine) {
+    stateMachine.setCurrentState(CapeMario.getInstance());
+    stateMachine.setScore(stateMachine.getScore() + 200);
+  }
+
+  @Override
+  public void obtainFireFlower(MarioStateMachine stateMachine) {
+    stateMachine.setCurrentState(FireMario.getInstance());
+    stateMachine.setScore(stateMachine.getScore() + 300);
+  }
+
+  @Override
+  public void meetMonster(MarioStateMachine stateMachine) {
+    // do nothing...
+  }
+}
+
+// 省略SuperMario、CapeMario、FireMario类...
+
+public class MarioStateMachine {
+  private int score;
+  private IMario currentState;
+
+  public MarioStateMachine() {
+    this.score = 0;
+    this.currentState = SmallMario.getInstance();
+  }
+
+  public void obtainMushRoom() {
+    this.currentState.obtainMushRoom(this);
+  }
+
+  public void obtainCape() {
+    this.currentState.obtainCape(this);
+  }
+
+  public void obtainFireFlower() {
+    this.currentState.obtainFireFlower(this);
+  }
+
+  public void meetMonster() {
+    this.currentState.meetMonster(this);
+  }
+
+  public int getScore() {
+    return this.score;
+  }
+
+  public State getCurrentState() {
+    return this.currentState.getName();
+  }
+
+  public void setScore(int score) {
+    this.score = score;
+  }
+
+  public void setCurrentState(IMario currentState) {
+    this.currentState = currentState;
+  }
+}
+```
+
+
+
+## 3.6 迭代器模式
+
+```java
+
+
+// 接口定义方式一  选用此种
+public interface Iterator<E> {
+  boolean hasNext();
+  void next();
+  E currentItem();
+}
+
+// 接口定义方式二
+public interface Iterator<E> {
+  boolean hasNext();
+  E next();
+}
+
+public class ArrayIterator<E> implements Iterator<E> {
+  private int cursor;
+  private ArrayList<E> arrayList;
+
+  public ArrayIterator(ArrayList<E> arrayList) {
+    this.cursor = 0;
+    this.arrayList = arrayList;
+  }
+
+  @Override
+  public boolean hasNext() {
+    return cursor != arrayList.size(); //注意这里，cursor在指向最后一个元素的时候，hasNext()仍旧返回true。
+  }
+
+  @Override
+  public void next() {
+    cursor++;
+  }
+
+  @Override
+  public E currentItem() {
+    if (cursor >= arrayList.size()) {
+      throw new NoSuchElementException();
+    }
+    return arrayList.get(cursor);
+  }
+}
+
+public class Demo {
+  public static void main(String[] args) {
+    ArrayList<String> names = new ArrayList<>();
+    names.add("xzg");
+    names.add("wang");
+    names.add("zheng");
+    
+    Iterator<String> iterator = new ArrayIterator(names);
+    while (iterator.hasNext()) {
+      System.out.println(iterator.currentItem());
+      iterator.next();
+    }
+  }
+}
+```
+
+1. 迭代器模式封装集合内部的复杂数据结构，开发者不需要了解如何遍历，直接使用容器提供的迭代器即可；
+2. 迭代器模式将集合对象的遍历操作从集合类中拆分出来，放到迭代器类中，让两者的职责更加单一；
+3. 迭代器模式让添加新的遍历算法更加容易，更符合开闭原则
+4. 除此之外，因为迭代器都实现自相同的接口，在开发中，基于接口而非实现编程，替换迭代器也变得更加容易。课堂讨论
+
+```java
+
+public class ArrayIterator implements Iterator {
+  private int cursor;
+  private ArrayList arrayList;
+  private int expectedModCount;
+
+  public ArrayIterator(ArrayList arrayList) {
+    this.cursor = 0;
+    this.arrayList = arrayList;
+    this.expectedModCount = arrayList.modCount;
+  }
+
+  @Override
+  public boolean hasNext() {
+    checkForComodification();
+    return cursor < arrayList.size();
+  }
+
+  @Override
+  public void next() {
+    checkForComodification();
+    cursor++;
+  }
+
+  @Override
+  public Object currentItem() {
+    checkForComodification();
+    return arrayList.get(cursor);
+  }
+  
+  private void checkForComodification() {
+    if (arrayList.modCount != expectedModCount)
+        throw new ConcurrentModificationException();
+  }
+}
+
+//代码示例
+public class Demo {
+  public static void main(String[] args) {
+    List<String> names = new ArrayList<>();
+    names.add("a");
+    names.add("b");
+    names.add("c");
+    names.add("d");
+
+    Iterator<String> iterator = names.iterator();
+    iterator.next();
+    names.remove("a");
+    iterator.next();//抛出ConcurrentModificationException异常
+  }
+}
+```
+
+## 3.7 访问者模式
+
+### 3.7.1 描述
+
+允许一个或者多个操作应用到一组对象上，解耦操作和对象本身
+
+### 3.7.2 实现
+
+```java
+
+public abstract class ResourceFile {
+  protected String filePath;
+  public ResourceFile(String filePath) {
+    this.filePath = filePath;
+  }
+  abstract public void accept(Extractor extractor);
+}
+
+public class PdfFile extends ResourceFile {
+  public PdfFile(String filePath) {
+    super(filePath);
+  }
+
+  @Override
+  public void accept(Extractor extractor) {
+    extractor.extract2txt(this);
+  }
+
+  //...
+}
+
+//...PPTFile、WordFile跟PdfFile类似，这里就省略了...
+//...Extractor代码不变...
+
+public class ToolApplication {
+  public static void main(String[] args) {
+    Extractor extractor = new Extractor();
+    List<ResourceFile> resourceFiles = listAllResourceFiles(args[0]);
+    for (ResourceFile resourceFile : resourceFiles) {
+      resourceFile.accept(extractor);
+    }
+  }
+
+  private static List<ResourceFile> listAllResourceFiles(String resourceDirectory) {
+    List<ResourceFile> resourceFiles = new ArrayList<>();
+    //...根据后缀(pdf/ppt/word)由工厂方法创建不同的类对象(PdfFile/PPTFile/WordFile)
+    resourceFiles.add(new PdfFile("a.pdf"));
+    resourceFiles.add(new WordFile("b.word"));
+    resourceFiles.add(new PPTFile("c.ppt"));
+    return resourceFiles;
+  }
+}
+```
+
+```java
+
+public abstract class ResourceFile {
+  protected String filePath;
+  public ResourceFile(String filePath) {
+    this.filePath = filePath;
+  }
+  abstract public void accept(Visitor vistor);
+}
+
+public class PdfFile extends ResourceFile {
+  public PdfFile(String filePath) {
+    super(filePath);
+  }
+
+  @Override
+  public void accept(Visitor visitor) {
+    visitor.visit(this);
+  }
+
+  //...
+}
+//...PPTFile、WordFile跟PdfFile类似，这里就省略了...
+
+public interface Visitor {
+  void visit(PdfFile pdfFile);
+  void visit(PPTFile pdfFile);
+  void visit(WordFile pdfFile);
+}
+
+public class Extractor implements Visitor {
+  @Override
+  public void visit(PPTFile pptFile) {
+    //...
+    System.out.println("Extract PPT.");
+  }
+
+  @Override
+  public void visit(PdfFile pdfFile) {
+    //...
+    System.out.println("Extract PDF.");
+  }
+
+  @Override
+  public void visit(WordFile wordFile) {
+    //...
+    System.out.println("Extract WORD.");
+  }
+}
+
+public class Compressor implements Visitor {
+  @Override
+  public void visit(PPTFile pptFile) {
+    //...
+    System.out.println("Compress PPT.");
+  }
+
+  @Override
+  public void visit(PdfFile pdfFile) {
+    //...
+    System.out.println("Compress PDF.");
+  }
+
+  @Override
+  public void visit(WordFile wordFile) {
+    //...
+    System.out.println("Compress WORD.");
+  }
+
+}
+
+public class ToolApplication {
+  public static void main(String[] args) {
+    Extractor extractor = new Extractor();
+    List<ResourceFile> resourceFiles = listAllResourceFiles(args[0]);
+    for (ResourceFile resourceFile : resourceFiles) {
+      resourceFile.accept(extractor);
+    }
+
+    Compressor compressor = new Compressor();
+    for(ResourceFile resourceFile : resourceFiles) {
+      resourceFile.accept(compressor);
+    }
+  }
+
+  private static List<ResourceFile> listAllResourceFiles(String resourceDirectory) {
+    List<ResourceFile> resourceFiles = new ArrayList<>();
+    //...根据后缀(pdf/ppt/word)由工厂方法创建不同的类对象(PdfFile/PPTFile/WordFile)
+    resourceFiles.add(new PdfFile("a.pdf"));
+    resourceFiles.add(new WordFile("b.word"));
+    resourceFiles.add(new PPTFile("c.ppt"));
+    return resourceFiles;
+  }
+}
+```
+
+## 3.8 备忘录模式
+
+### 3.8.1 描述
+
+在不违背封装原则的前提下，捕获一个对象的内部状态，并在该对象之外保存这个状态，以便之后恢复对象为先前的状态
+
+### 3.8.2 实现
+
+```java
+
+public class InputText {
+  private StringBuilder text = new StringBuilder();
+
+  public String getText() {
+    return text.toString();
+  }
+
+  public void append(String input) {
+    text.append(input);
+  }
+
+  public Snapshot createSnapshot() {
+    return new Snapshot(text.toString());
+  }
+
+  public void restoreSnapshot(Snapshot snapshot) {
+    this.text.replace(0, this.text.length(), snapshot.getText());
+  }
+}
+
+public class Snapshot {
+  private String text;
+
+  public Snapshot(String text) {
+    this.text = text;
+  }
+
+  public String getText() {
+    return this.text;
+  }
+}
+
+public class SnapshotHolder {
+  private Stack<Snapshot> snapshots = new Stack<>();
+
+  public Snapshot popSnapshot() {
+    return snapshots.pop();
+  }
+
+  public void pushSnapshot(Snapshot snapshot) {
+    snapshots.push(snapshot);
+  }
+}
+
+public class ApplicationMain {
+  public static void main(String[] args) {
+    InputText inputText = new InputText();
+    SnapshotHolder snapshotsHolder = new SnapshotHolder();
+    Scanner scanner = new Scanner(System.in);
+    while (scanner.hasNext()) {
+      String input = scanner.next();
+      if (input.equals(":list")) {
+        System.out.println(inputText.toString());
+      } else if (input.equals(":undo")) {
+        Snapshot snapshot = snapshotsHolder.popSnapshot();
+        inputText.restoreSnapshot(snapshot);
+      } else {
+        snapshotsHolder.pushSnapshot(inputText.createSnapshot());
+        inputText.append(input);
+      }
+    }
+  }
+}
+```
+
+## 3.9 命令模式 *
+
+### 3.9.1 描述
+
+命令模式将请求（命令）封装为一个对象，这样可以使用不同的请求参数化其他对象（将不同请求依赖注入到其他对象），并且能够支持请求（命令）的排队执行、记录日志、撤销等（附加控制）功能
+
+### 3.9.2 实现
+
+```java
+
+public interface Command {
+  void execute();
+}
+
+public class GotDiamondCommand implements Command {
+  // 省略成员变量
+
+  public GotDiamondCommand(/*数据*/) {
+    //...
+  }
+
+  @Override
+  public void execute() {
+    // 执行相应的逻辑
+  }
+}
+//GotStartCommand/HitObstacleCommand/ArchiveCommand类省略
+
+public class GameApplication {
+  private static final int MAX_HANDLED_REQ_COUNT_PER_LOOP = 100;
+  private Queue<Command> queue = new LinkedList<>();
+
+  public void mainloop() {
+    while (true) {
+      List<Request> requests = new ArrayList<>();
+      
+      //省略从epoll或者select中获取数据，并封装成Request的逻辑，
+      //注意设置超时时间，如果很长时间没有接收到请求，就继续下面的逻辑处理。
+      
+      for (Request request : requests) {
+        Event event = request.getEvent();
+        Command command = null;
+        if (event.equals(Event.GOT_DIAMOND)) {
+          command = new GotDiamondCommand(/*数据*/);
+        } else if (event.equals(Event.GOT_STAR)) {
+          command = new GotStartCommand(/*数据*/);
+        } else if (event.equals(Event.HIT_OBSTACLE)) {
+          command = new HitObstacleCommand(/*数据*/);
+        } else if (event.equals(Event.ARCHIVE)) {
+          command = new ArchiveCommand(/*数据*/);
+        } // ...一堆else if...
+
+        queue.add(command);
+      }
+
+      int handledCount = 0;
+      while (handledCount < MAX_HANDLED_REQ_COUNT_PER_LOOP) {
+        if (queue.isEmpty()) {
+          break;
+        }
+        Command command = queue.poll();
+        command.execute();
+      }
+    }
+  }
+}
+```
+
+## 3.10 解释器模式 *
+
+### 3.10.1 描述
+
+解释器模式为某个语言定义它的语法（或者叫文法）表示，并定义一个解释器用来处理这个语法
+
+### 3.10.2 实现
+
+```java
+
+public class ExpressionInterpreter {
+  private Deque<Long> numbers = new LinkedList<>();
+
+  public long interpret(String expression) {
+    String[] elements = expression.split(" ");
+    int length = elements.length;
+    for (int i = 0; i < (length+1)/2; ++i) {
+      numbers.addLast(Long.parseLong(elements[i]));
+    }
+
+    for (int i = (length+1)/2; i < length; ++i) {
+      String operator = elements[i];
+      boolean isValid = "+".equals(operator) || "-".equals(operator)
+              || "*".equals(operator) || "/".equals(operator);
+      if (!isValid) {
+        throw new RuntimeException("Expression is invalid: " + expression);
+      }
+
+      long number1 = numbers.pollFirst();
+      long number2 = numbers.pollFirst();
+      long result = 0;
+      if (operator.equals("+")) {
+        result = number1 + number2;
+      } else if (operator.equals("-")) {
+        result = number1 - number2;
+      } else if (operator.equals("*")) {
+        result = number1 * number2;
+      } else if (operator.equals("/")) {
+        result = number1 / number2;
+      }
+      numbers.addFirst(result);
+    }
+
+    if (numbers.size() != 1) {
+      throw new RuntimeException("Expression is invalid: " + expression);
+    }
+
+    return numbers.pop();
+  }
+}
+```
+
+```java
+
+public interface Expression {
+  long interpret();
+}
+
+public class NumberExpression implements Expression {
+  private long number;
+
+  public NumberExpression(long number) {
+    this.number = number;
+  }
+
+  public NumberExpression(String number) {
+    this.number = Long.parseLong(number);
+  }
+
+  @Override
+  public long interpret() {
+    return this.number;
+  }
+}
+
+public class AdditionExpression implements Expression {
+  private Expression exp1;
+  private Expression exp2;
+
+  public AdditionExpression(Expression exp1, Expression exp2) {
+    this.exp1 = exp1;
+    this.exp2 = exp2;
+  }
+
+  @Override
+  public long interpret() {
+    return exp1.interpret() + exp2.interpret();
+  }
+}
+// SubstractionExpression/MultiplicationExpression/DivisionExpression与AdditionExpression代码结构类似，这里就省略了
+
+public class ExpressionInterpreter {
+  private Deque<Expression> numbers = new LinkedList<>();
+
+  public long interpret(String expression) {
+    String[] elements = expression.split(" ");
+    int length = elements.length;
+    for (int i = 0; i < (length+1)/2; ++i) {
+      numbers.addLast(new NumberExpression(elements[i]));
+    }
+
+    for (int i = (length+1)/2; i < length; ++i) {
+      String operator = elements[i];
+      boolean isValid = "+".equals(operator) || "-".equals(operator)
+              || "*".equals(operator) || "/".equals(operator);
+      if (!isValid) {
+        throw new RuntimeException("Expression is invalid: " + expression);
+      }
+
+      Expression exp1 = numbers.pollFirst();
+      Expression exp2 = numbers.pollFirst();
+      Expression combinedExp = null;
+      if (operator.equals("+")) {
+        combinedExp = new AdditionExpression(exp1, exp2);
+      } else if (operator.equals("-")) {
+        combinedExp = new AdditionExpression(exp1, exp2);
+      } else if (operator.equals("*")) {
+        combinedExp = new AdditionExpression(exp1, exp2);
+      } else if (operator.equals("/")) {
+        combinedExp = new AdditionExpression(exp1, exp2);
+      }
+      long result = combinedExp.interpret();
+      numbers.addFirst(new NumberExpression(result));
+    }
+
+    if (numbers.size() != 1) {
+      throw new RuntimeException("Expression is invalid: " + expression);
+    }
+
+    return numbers.pop().interpret();
+  }
+}
+```
+
+## 3.11 中介模式 *
+
+### 3.11.1 描述
+
+中介模式定义了一个单独的（中介）对象，来封装一组对象之间的交互。将这组对象之间的交互委派给与中介对象交互，来避免对象之间的直接交互
+
+### 3.11.2 实现
+
+```java
+
+public interface Mediator {
+  void handleEvent(Component component, String event);
+}
+
+public class LandingPageDialog implements Mediator {
+  private Button loginButton;
+  private Button regButton;
+  private Selection selection;
+  private Input usernameInput;
+  private Input passwordInput;
+  private Input repeatedPswdInput;
+  private Text hintText;
+
+  @Override
+  public void handleEvent(Component component, String event) {
+    if (component.equals(loginButton)) {
+      String username = usernameInput.text();
+      String password = passwordInput.text();
+      //校验数据...
+      //做业务处理...
+    } else if (component.equals(regButton)) {
+      //获取usernameInput、passwordInput、repeatedPswdInput数据...
+      //校验数据...
+      //做业务处理...
+    } else if (component.equals(selection)) {
+      String selectedItem = selection.select();
+      if (selectedItem.equals("login")) {
+        usernameInput.show();
+        passwordInput.show();
+        repeatedPswdInput.hide();
+        hintText.hide();
+        //...省略其他代码
+      } else if (selectedItem.equals("register")) {
+        //....
+      }
+    }
+  }
+}
+
+public class UIControl {
+  private static final String LOGIN_BTN_ID = "login_btn";
+  private static final String REG_BTN_ID = "reg_btn";
+  private static final String USERNAME_INPUT_ID = "username_input";
+  private static final String PASSWORD_INPUT_ID = "pswd_input";
+  private static final String REPEATED_PASSWORD_INPUT_ID = "repeated_pswd_input";
+  private static final String HINT_TEXT_ID = "hint_text";
+  private static final String SELECTION_ID = "selection";
+
+  public static void main(String[] args) {
+    Button loginButton = (Button)findViewById(LOGIN_BTN_ID);
+    Button regButton = (Button)findViewById(REG_BTN_ID);
+    Input usernameInput = (Input)findViewById(USERNAME_INPUT_ID);
+    Input passwordInput = (Input)findViewById(PASSWORD_INPUT_ID);
+    Input repeatedPswdInput = (Input)findViewById(REPEATED_PASSWORD_INPUT_ID);
+    Text hintText = (Text)findViewById(HINT_TEXT_ID);
+    Selection selection = (Selection)findViewById(SELECTION_ID);
+
+    Mediator dialog = new LandingPageDialog();
+    dialog.setLoginButton(loginButton);
+    dialog.setRegButton(regButton);
+    dialog.setUsernameInput(usernameInput);
+    dialog.setPasswordInput(passwordInput);
+    dialog.setRepeatedPswdInput(repeatedPswdInput);
+    dialog.setHintText(hintText);
+    dialog.setSelection(selection);
+
+    loginButton.setOnClickListener(new OnClickListener() {
+      @Override
+      public void onClick(View v) {
+        dialog.handleEvent(loginButton, "click");
+      }
+    });
+
+    regButton.setOnClickListener(new OnClickListener() {
+      @Override
+      public void onClick(View v) {
+        dialog.handleEvent(regButton, "click");
+      }
+    });
+
+    //....
+  }
+}
+```
+
